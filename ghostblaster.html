@@ -108,7 +108,7 @@
   const canvas = document.getElementById('c');
   const ctx = canvas.getContext('2d');
 
-  // ---- GAME STATE ----
+  // GAME STATE 
   let score = 0;
   let ammo = 10;
   let wave = 1;
@@ -116,18 +116,18 @@
   let animId;
   let gameOverFlag = false;
 
-  // ---- OBJECT 1: GHOSTS ----
+  // OBJECT 1: GHOSTS 
   // APPLICATION: ghosts have position, size, appearance, and behaviour
   let ghosts = [];
 
-  // ---- OBJECT 2: BULLETS ----
+  // OBJECT 2: BULLETS
   // APPLICATION: bullets are separate objects with their own motion
   let bullets = [];
 
-  // ---- OBJECT 3: PARTICLES (splat effect) ----
+  // OBJECT 3: PARTICLES (splat effect)
   let particles = [];
 
-  // ---- FLOATING SCORE POPUPS ----
+  // FLOATING SCORE POPUPS 
   let popups = [];
 
   // mouse position
@@ -220,7 +220,7 @@
     // ghost body
     ctx.fillStyle = g.color;
     ctx.beginPath();
-    ctx.arc(0, 0, s, Math.PI, 0, false);        // top dome
+    ctx.arc(0, 0, s, Math.PI, 0, false); // top dome
     // wobbly skirt bottom — GEOMETRY: sin wave simulates flowing skirt
     const segs = 4;
     for (let i = 0; i <= segs; i++) {
