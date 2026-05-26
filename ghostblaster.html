@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Ghost Blaster 👻</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #0d0015;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      font-family: 'Courier New', monospace;
+      color: white;
+      user-select: none;
+    }
+
+    h1 {
+      font-size: 2rem;
+      margin-bottom: 8px;
+      letter-spacing: 4px;
+      color: #c084fc;
+      text-shadow: 0 0 16px #c084fc99;
+    }
+
+    #hud {
+      display: flex;
+      gap: 40px;
+      margin-bottom: 12px;
+      font-size: 1rem;
+    }
+
+    #hud span { color: #a78bfa; }
+    #hud strong { color: white; font-size: 1.2rem; }
+
+    canvas {
+      border: 3px solid #7c3aed;
+      border-radius: 10px;
+      display: block;
+      box-shadow: 0 0 40px #7c3aed55;
+      cursor: crosshair;
+    }
+
+    #msg {
+      margin-top: 12px;
+      font-size: 0.85rem;
+      color: #666;
+      letter-spacing: 1px;
+    }
+
+    #startScreen {
+      position: absolute;
+      inset: 0;
+      background: rgba(13,0,21,0.92);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      border-radius: 8px;
+    }
+
+    #startScreen h2 { font-size: 2rem; color: #c084fc; text-shadow: 0 0 20px #c084fc; }
+    #startScreen p  { color: #ccc; font-size: 0.9rem; text-align: center; max-width: 280px; line-height: 1.6; }
+
+    button {
+      padding: 10px 32px;
+      background: #7c3aed;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      font-family: 'Courier New', monospace;
+      font-size: 1rem;
+      font-weight: bold;
+      cursor: pointer;
+      letter-spacing: 2px;
+      margin-top: 6px;
+    }
+    button:hover { background: #9333ea; }
+  </style>
+</head>
+<body>
+
+<h1>👻 GHOST BLASTER</h1>
+
+<div id="hud">
+  <div><span>SCORE: </span><strong id="scoreDisplay">0</strong></div>
+  <div><span>AMMO: </span><strong id="ammoDisplay">20</strong></div>
+  <div><span>GHOSTS: </span><strong id="ghostDisplay">0</strong></div>
+</div>
+
+<div style="position:relative;">
+  <canvas id="c" width="500" height="520"></canvas>
+
+  <div id="startScreen">
+    <h2>👻 GHOST BLASTER</h2>
+    <p>Click ghosts to shoot them.<br>Big ghosts split into 2 smaller red ones when hit.<br>Small red ghosts are gone for good.<br><br>You get <strong>20 bullets</strong> per wave. Don't waste them!</p>
+    <button id="startBtn">PLAY</button>
+  </div>
+</div>
+
+<div id="msg">🖱️ click to shoot</div>
+
+<script>
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+
+  // ---- GAME STATE ----
+  let score = 0;
+  let ammo = 10;
+  let wave = 1;
+  let running = false;
+  let animId;
+  let gameOverFlag = false;
+
+  // ---- OBJECT 1: GHOSTS ----
+  // APPLICATION: ghosts have position, size, appearance, and behaviour
+  let ghosts = [];
+
+  // ---- OBJECT 2: BULLETS ----
+  // APPLICATION: bullets are separate objects with their own motion
+  let bullets = [];
+
+  // ---- OBJECT 3: PARTICLES (splat effect) ----
+  let particles = [];
+
+  // ---- FLOATING SCORE POPUPS ----
+  let popups = [];
+
+  // mouse position
+  let mouseX = 0, mouseY = 0;
+  canvas.addEventListener('mousemove', e => {
+    const r = canvas.getBoundingClientRect();
+    mouseX = e.clientX - r.left;
+    mouseY = e.clientY - r.top;
+  });
+
+  // shoot on click
+  canvas.addEventListener('click', e => {
+    if (!running || gameOverFlag) return;
+    if (ammo <= 0) return;
+
+    const r = canvas.getBoundingClientRect();
+    const cx = e.clientX - r.left;
+    const cy = e.clientY - r.top;
+
+    // OBJECT 2: spawn bullet traveling toward click point
+    // GEOMETRY: bullet direction calculated as a normalised vector
+    const angle = Math.atan2(cy - canvas.height, cx - canvas.width / 2);
+    bullets.push({
+      x: canvas.width / 2,
+      y: canvas.height - 20,
+      tx: cx,
+      ty: cy,
+      vx: Math.cos(angle) * 12,
+      vy: Math.sin(angle) * 12,
+      life: 1,
+    });
+
+    ammo--;
+    updateHUD();
+
+    // if out of ammo and ghosts still alive, state = game over
+    if (ammo <= 0) {
+      setTimeout(() => {
+        if (ghosts.length > 0) endGame(false);
+      }, 1200);
+    }
+  });
+
+  // ---- SPAWN A GHOST ----
+  // APPLICATION: Ghost appearance (size, color, speed)
+  function spawnGhost(x, y, size) {
+    // GEOMETRY: random direction vector for drifting motion
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 0.8 + Math.random() * 1.2 + wave * 0.15;
+    ghosts.push({
+      x: x ?? Math.random() * (canvas.width - 80) + 40,
+      y: y ?? Math.random() * (canvas.height / 2) + 40,
+      size: size ?? 36,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      wobble: Math.random() * Math.PI * 2,   
+      alpha: 0,                               // RASTERIZATION: fade in
+      fadeIn: true,
+      color: size && size < 30 ? '#ff4444' : '#ffffff',  // smaller ghosts = red
+      eyeTimer: 0,
+    });
+  }
+
+  function spawnWave() {
+    const count = 1 + wave;
+    for (let i = 0; i < count; i++) {
+      setTimeout(() => spawnGhost(), i * 400);
+    }
+    ammo = 16 + wave * 2;
+    updateHUD();
+  }
+
+  // DRAWING THE GHOST FIGURES
+  // GEOMETRY: ghost body drawn with arcs; wobbly skirt simulates motion direction
+  function drawGhost(g) {
+    ctx.save();
+
+    // GEOMETRY: translate to ghost position
+    ctx.translate(g.x, g.y);
+
+    // RASTERIZATION: alpha transparency — ghosts fade in and are semi-transparent
+    ctx.globalAlpha = g.alpha * 0.92;
+
+    const s = g.size;
+
+    // ghost glow (rasterization: layered glow underneath body)
+    ctx.shadowColor = g.color;
+    ctx.shadowBlur = 20;
+
+    // ghost body
+    ctx.fillStyle = g.color;
+    ctx.beginPath();
+    ctx.arc(0, 0, s, Math.PI, 0, false);        // top dome
+    // wobbly skirt bottom — GEOMETRY: sin wave simulates flowing skirt
+    const segs = 4;
+    for (let i = 0; i <= segs; i++) {
+      const bx = -s + (i / segs) * s * 2;
+      const by = s + Math.sin(g.wobble + i * 1.8) * (s * 0.3);
+      if (i === 0) ctx.lineTo(bx, by);
+      else ctx.lineTo(bx, by);
+    }
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.shadowBlur = 0;
+
+    // eyes (rasterization: white circles drawn on top of ghost body = overlapping shapes)
+    ctx.globalAlpha = g.alpha;
+    ctx.fillStyle = '#1e1b4b';
+    ctx.beginPath();
+    ctx.arc(-s * 0.3, -s * 0.1, s * 0.18, 0, Math.PI * 2);
+    ctx.arc( s * 0.3, -s * 0.1, s * 0.18, 0, Math.PI * 2);
+    ctx.fill();
+
+    // eye shine
+    ctx.fillStyle = 'white';
+    ctx.beginPath();
+    ctx.arc(-s * 0.25, -s * 0.16, s * 0.07, 0, Math.PI * 2);
+    ctx.arc( s * 0.35, -s * 0.16, s * 0.07, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+
+  // DRAWING THE PLAYER GUN 
+  // APPLICATION: player is an object with position and appearance
+  function drawGun() {
+    ctx.save();
+
+    // GEOMETRY: rotate gun barrel to face the mouse cursor
+    const angle = Math.atan2(mouseY - canvas.height + 20, mouseX - canvas.width / 2);
+
+    ctx.translate(canvas.width / 2, canvas.height - 20);
+    ctx.rotate(angle);
+
+    // gun body
+    ctx.fillStyle = '#7c3aed';
+    ctx.shadowColor = '#a855f7';
+    ctx.shadowBlur = 10;
+    ctx.fillRect(0, -8, 40, 16);
+
+    // barrel tip
+    ctx.fillStyle = '#c084fc';
+    ctx.fillRect(38, -5, 14, 10);
+
+    // gun handle
+    ctx.fillStyle = '#4c1d95';
+    ctx.fillRect(-18, 0, 18, 28);
+
+    ctx.restore();
+  }
+
+  // CREATING BULLETS 
+  // OBJECT 2: bullets as glowing orbs
+  function drawBullets() {
+    bullets.forEach(b => {
+      ctx.save();
+      // RASTERIZATION: bullet drawn on top of ghosts when overlapping
+      ctx.globalAlpha = b.life;
+      ctx.fillStyle = '#fde68a';
+      ctx.shadowColor = '#fbbf24';
+      ctx.shadowBlur = 12;
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, 5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    });
+  }
+
+  // DRAWING PARTICLES THAT'LL APPEAR ONCE GHOSTS ARE HIT ----
+  // RASTERIZATION: semi-transparent overlapping splat particles
+  function drawParticles() {
+    particles.forEach(p => {
+      ctx.save();
+      ctx.globalAlpha = p.life * 0.8;
+      ctx.fillStyle = p.color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    });
+  }
+
+  // SCORE POPUPS
+  function drawPopups() {
+    popups.forEach(p => {
+      ctx.save();
+      ctx.globalAlpha = p.life;
+      ctx.fillStyle = '#fde68a';
+      ctx.font = `bold ${p.size}px Courier New`;
+      ctx.textAlign = 'center';
+      ctx.fillText(p.text, p.x, p.y);
+      ctx.restore();
+    });
+  }
+
+  // BACKGROUND
+  // RASTERIZATION: background is the first layer drawn; everything else goes on top
+  const bgStars = Array.from({length: 60}, () => ({
+    x: Math.random() * 500,
+    y: Math.random() * 520,
+    r: Math.random() * 1.2 + 0.3,
+    twinkle: Math.random() * Math.PI * 2,
+  }));
+
+  function drawBackground(t) {
+    ctx.fillStyle = '#0d0015';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // twinkling bg stars
+    bgStars.forEach(s => {
+      const a = 0.3 + Math.sin(t * 0.02 + s.twinkle) * 0.25;
+      ctx.globalAlpha = a;
+      ctx.fillStyle = '#e9d5ff';
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+      ctx.fill();
+    });
+    ctx.globalAlpha = 1;
+
+    // ground line
+    ctx.strokeStyle = '#3b0764';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, canvas.height - 40);
+    ctx.lineTo(canvas.width, canvas.height - 40);
+    ctx.stroke();
+  }
+
+  // COLLISION: bullet hits ghost
+  function checkHits() {
+    bullets = bullets.filter(b => {
+      let hit = false;
+      ghosts = ghosts.filter(g => {
+        if (hit) return true;
+        const dx = b.x - g.x;
+        const dy = b.y - g.y;
+        const dist = Math.sqrt(dx*dx + dy*dy);
+        if (dist < g.size) {
+          hit = true;
+
+          // splat particles
+          for (let i = 0; i < 12; i++) {
+            const a = Math.random() * Math.PI * 2;
+            const spd = Math.random() * 4 + 1;
+            particles.push({
+              x: g.x, y: g.y,
+              vx: Math.cos(a) * spd,
+              vy: Math.sin(a) * spd,
+              life: 1,
+              color: g.color,
+              size: Math.random() * 6 + 2,
+            });
+          }
+
+          // big ghost splits into 2 smaller ones
+          if (g.size >= 30) {
+            setTimeout(() => spawnGhost(g.x - 60, g.y, 20), 100);
+            setTimeout(() => spawnGhost(g.x + 60, g.y, 20), 100);
+            score += 10;
+            popups.push({ x: g.x, y: g.y - 20, text: '+10', life: 1, size: 18 });
+          } else {
+            score += 25;
+            popups.push({ x: g.x, y: g.y - 20, text: '+25', life: 1, size: 22 });
+          }
+
+          updateHUD();
+          return false; // remove ghost
+        }
+        return true;
+      });
+      return !hit; // remove bullet if it hit something
+    });
+  }
+
+  // UPDATE HUD 
+  function updateHUD() {
+    document.getElementById('scoreDisplay').textContent = score;
+    document.getElementById('ammoDisplay').textContent = ammo;
+    document.getElementById('ghostDisplay').textContent = ghosts.length;
+  }
+
+  // GAME OVER / WIN 
+  function endGame(won) {
+    running = false;
+    gameOverFlag = true;
+    cancelAnimationFrame(animId);
+
+    ctx.fillStyle = 'rgba(13,0,21,0.8)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.textAlign = 'center';
+
+    if (won) {
+      ctx.fillStyle = '#c084fc';
+      ctx.font = 'bold 38px Courier New';
+      ctx.fillText('YOU WIN! 🎉', canvas.width/2, canvas.height/2 - 30);
+    } else {
+      ctx.fillStyle = '#f87171';
+      ctx.font = 'bold 36px Courier New';
+      ctx.fillText('OUT OF AMMO 💀', canvas.width/2, canvas.height/2 - 30);
+    }
+
+    ctx.fillStyle = 'white';
+    ctx.font = '20px Courier New';
+    ctx.fillText(`Final Score: ${score}`, canvas.width/2, canvas.height/2 + 20);
+    ctx.fillText('Refresh to play again!', canvas.width/2, canvas.height/2 + 55);
+  }
+
+  // MAIN LOOP
+  let t = 0;
+
+  function loop() {
+    t++;
+
+    // GEOMETRY: update ghost positions (drifting motion)
+    ghosts.forEach(g => {
+      g.x += g.vx;
+      g.y += g.vy;
+      g.wobble += 0.06;   // wobble animation
+
+      // GEOMETRY: bounce off walls (direction reversal)
+      if (g.x < g.size || g.x > canvas.width - g.size)  g.vx *= -1;
+      if (g.y < g.size || g.y > canvas.height - 60)      g.vy *= -1;
+
+      // RASTERIZATION: fade in transparency
+      if (g.fadeIn) {
+        g.alpha = Math.min(1, g.alpha + 0.03);
+        if (g.alpha >= 1) g.fadeIn = false;
+      }
+    });
+
+    // GEOMETRY: move bullets in straight line
+    bullets.forEach(b => {
+      b.x += b.vx;
+      b.y += b.vy;
+      b.life -= 0.02;
+    });
+    bullets = bullets.filter(b => b.life > 0 && b.x > 0 && b.x < canvas.width && b.y > 0 && b.y < canvas.height);
+
+    // update particles
+    particles.forEach(p => {
+      p.x += p.vx;
+      p.y += p.vy;
+      p.vy += 0.1; // gravity
+      p.life -= 0.035;
+    });
+    particles = particles.filter(p => p.life > 0);
+
+    // update popups
+    popups.forEach(p => { p.y -= 1.2; p.life -= 0.025; });
+    popups = popups.filter(p => p.life > 0);
+
+    checkHits();
+    updateHUD();
+
+    // wave cleared!
+    if (ghosts.length === 0 && running && ammo >= 0) {
+      wave++;
+      setTimeout(() => {
+        if (wave > 4) { endGame(true); return; }
+        spawnWave();
+      }, 800);
+      running = false;
+      setTimeout(() => running = true, 800);
+    }
+
+    // DRAW (layers back to front = rasterization) 
+    drawBackground(t);     // layer 1: bg
+    drawParticles();       // layer 2: splat particles
+    ghosts.forEach(drawGhost); // layer 3: ghosts
+    drawBullets();         // layer 4: bullets (overlap ghosts)
+    drawGun();             // layer 5: player gun on top of everything
+    drawPopups();          // layer 6: score text floats above all
+
+    animId = requestAnimationFrame(loop);
+  }
+
+  function startGame() {
+    document.getElementById('startScreen').style.display = 'none';
+    score = 0; wave = 1; ammo = 10;
+    ghosts = []; bullets = []; particles = []; popups = [];
+    gameOverFlag = false;
+    running = true;
+    spawnWave();
+    loop();
+  }
+
+  document.getElementById('startBtn').addEventListener('click', startGame);
+</script>
+
+</body>
+</html>
